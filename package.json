@@ -1,0 +1,17 @@
+{
+  "name": "telegram-multi-account-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@fivenorth/loop-sdk": "github:fivenorth-io/loop-sdk",
+    "@temple-digital-group/temple-canton-js": "^2.0.0-beta.4",
+    "dotenv": "^16.6.1",
+    "node-forge": "^1.4.0",
+    "node-telegram-bot-api": "^0.67.0"
+  }
+}

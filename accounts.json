@@ -1,0 +1,24 @@
+{
+  "common": {
+    "network": "mainnet",
+    "market": "CC/USDCx",
+    "orderType": "market",
+    "side": "buy",
+    "orderSize": 35,
+    "buyDiscount": 0.0005,
+    "sellPremium": 0.0005,
+    "slippagePct": 0.1,
+    "dryRun": false
+  },
+  "accounts": [
+    {
+      "name": "acc1",
+      "apiKey": "isiapikeytemple",
+      "loopPrivateKey": "isiprivatekeyloop",
+      "partyId": "isiaddressloop",
+      "network": "mainnet",
+      "orderType": "market",
+      "side": "buy"
+    }
+  ]
+}

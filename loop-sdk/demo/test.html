@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Loop SDK Demo dApp</title>
+</head>
+
+<body>
+    <div id="app"></div>
+
+    <script type="module">
+        import { h, render } from 'https://esm.sh/preact';
+        import { useState, useEffect } from 'https://esm.sh/preact/hooks';
+        import htm from 'https://esm.sh/htm';
+        //import { loop } from 'https://unpkg.com/@fivenorth/loop-sdk@latest/dist';
+        import { loop } from './dist/index.js';
+
+        const html = htm.bind(h);
+        const networkEnv = window.location.hostname === 'localhost' ? 'local' : 'devnet';
+        const getLighthouseBaseUrl = (network) => {
+            switch (network) {
+                case 'main' || 'mainnet':
+                    return 'https://lighthouse.cantonloop.com';
+                case 'test' || 'testnet':
+                    return 'https://lighthouse.testnet.cantonloop.com';
+                case 'devnet':
+                    return 'https://lighthouse.devnet.cantonloop.com';
+                default:
+                    return 'https://lighthouse.devnet.cantonloop.com';
+            }
+        };
+
+        const getDamlCommandTemplate = (partyId = '') => ({
+            commands: [ {
+                ExerciseCommand: {
+                    templateId: "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory",
+                    contractId: '009f00e5bf00640118d849080aaf22bc963a8458d322585cebf1119cb7bf37a955ca11122065b775fb8a4199904ed32fa9277fd9c0e82bb82319a7151249df124182072381',
+                    choice: 'TransferFactory_Transfer',
+                    choiceArgument: {
+                        expectedAdmin: "DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a",
+                        transfer: {
+                            sender: partyId,
+                            receiver: '510ae534b026134d27e23ee14ac83be3::1220e21e937baf58245ad64e5e4a903a6b6c46e86c6d12dc0d7408be746fb804b56d',
+                            amount: '1.5',
+                            instrumentId: {
+                                admin: 'DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a',
+                                id: 'Amulet',
+                            },
+                            requestedAt: new Date().toISOString(),
+                            executeBefore: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+                            lock: null,
+                            meta: { values: {} },
+                            inputHoldingCids: [ 'list-of-holing-amulet-cid' ],
+                            meta: {
+                                values: {
+                                    "splice.lfdecentralizedtrust.org/reason": "demo transfer by LoopSDK"
+                                }
+                            },
+                        },
+                        extraArgs: {
+                            context: {
+                                values: {
+                                    "get-these-from-factory": ""
+                                }
+                            },
+                            meta: {
+                                values: {}
+                            }
+                        },
+                    }
+                }
+            } ],
+            packageIdSelectionPreference: [],
+            disclosedContracts: [],
+        });
+
+        function App ()
+        {
+            const [ account, setAccount ] = useState(null);
+            const [ provider, setProvider ] = useState(null);
+            const [ holdings, setHoldings ] = useState([]);
+            const [ isLoading, setIsLoading ] = useState(false);
+            const [ templateId, setTemplateId ] = useState('');
+            const [ activeContract, setActiveContract ] = useState([]);
+            const [ isFindingContract, setIsFindingContract ] = useState(false);
+            const [ interfaceId, setInterfaceId ] = useState('');
+            const [ contractByInterface, setContractByInterface ] = useState([]);
+            const [ isFindingByInterface, setIsFindingByInterface ] = useState(false);
+            const [ damlCommand, setDamlCommand ] = useState(JSON.stringify(getDamlCommandTemplate(), null, 2));
+            const [ isSubmittingTx, setIsSubmittingTx ] = useState(false);
+            const [ txResult, setTxResult ] = useState(null);
+            const [ txEstimate, setTxEstimate ] = useState(null);
+            const [ isEstimatingTx, setIsEstimatingTx ] = useState(false);
+            const [ txUpdate, setTxUpdate ] = useState(null);
+            const [ txUpdateLog, setTxUpdateLog ] = useState('');
+            const [ lastBroadcast, setLastBroadcast ] = useState(null);
+            const [ executionMode, setExecutionMode ] = useState('async');
+            const [ rawMessage, setRawMessage ] = useState('Hello, Loop!');
+            const [ signature, setSignature ] = useState(null);
+            const [ isSigning, setIsSigning ] = useState(false);
+            const [ transferRecipient, setTransferRecipient ] = useState('');
+            const [ transferAmount, setTransferAmount ] = useState('');
+            const [ transferInstrumentAdmin, setTransferInstrumentAdmin ] = useState('');
+            const [ transferInstrumentId, setTransferInstrumentId ] = useState('');
+            const [ transferRequestTimeout, setTransferRequestTimeout ] = useState('');
+            const [ transferMemo, setTransferMemo ] = useState('');
+            const [ transferResult, setTransferResult ] = useState(null);
+            const [ transferEstimate, setTransferEstimate ] = useState(null);
+            const [ isEstimatingTransfer, setIsEstimatingTransfer ] = useState(false);
+            const [ isTransferring, setIsTransferring ] = useState(false);
+            const [ lastTxSource, setLastTxSource ] = useState(null);
+            const [ withdrawRecipient, setWithdrawRecipient ] = useState('');
+            const [ withdrawAmount, setWithdrawAmount ] = useState('');
+            const [ withdrawReference, setWithdrawReference ] = useState('');
+            const [ withdrawRequestTimeout, setWithdrawRequestTimeout ] = useState('');
+            const [ withdrawResult, setWithdrawResult ] = useState(null);
+            const [ isWithdrawing, setIsWithdrawing ] = useState(false);
+            const [ customTxMessage, setCustomTxMessage ] = useState('');
+            const [ txDedupSeconds, setTxDedupSeconds ] = useState('');
+            const [ accountInfo, setAccountInfo ] = useState(null);
+
+            const normalizeError = (error, fallbackMessage) => ({
+                error: error?.message || fallbackMessage,
+                code: error?.code || '',
+                name: error?.name || '',
+            });
+
+            useEffect(async () =>
+            {
+                loop.init({
+                    appName: 'Demo DAPP',
+                    network: networkEnv,
+                    onTransactionUpdate: (payload, message) => {
+                        console.log('Transaction update:', payload, message);
+                        setTxUpdate(payload);
+                        setTxUpdateLog(new Date().toISOString());
+                        setLastBroadcast(message || null);
+                    },
+                    options: {
+                        openMode: 'popup', // 'popup' (default) or 'tab'
+                        requestSigningMode: 'popup', // 'popup' (default) | 'tab'
+                        redirectUrl: 'https://example.com/after-connect', // optional redirect after approval
+                    },
+                    onAccept: (prov) =>
+                    {
+                        setProvider(prov);
+                        console.log('Provider:', prov);
+                        setAccount({ partyId: prov.party_id, publicKey: prov.public_key });
+                    },
+                    onReject: () =>
+                    {
+                        console.log('Connection Rejected');
+                        setAccount(null);
+                        setProvider(null);
+                        setHoldings([]);
+                    },
+                });
+
+                await loop.autoConnect();
+            }, []);
+
+            useEffect(() =>
+            {
+                if (account?.partyId)
+                {
+                    setDamlCommand(JSON.stringify(getDamlCommandTemplate(account.partyId), null, 2));
+                }
+            }, [ account ]);
+
+
+            const handleConnect = () =>
+            {
+                loop.connect();
+            };
+
+            const handleGetHolding = async () =>
+            {
+                if (!provider) return;
+                setIsLoading(true);
+                try
+                {
+                    const fetchedHoldings = await provider.getHolding();
+                    console.log('Holdings:', fetchedHoldings);
+                    setHoldings(fetchedHoldings);
+                } catch (error)
+                {
+                    console.error('Failed to get holdings:', error);
+                    alert('Failed to get holdings. See console.');
+                } finally
+                {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleGetAccount = async () =>
+            {
+                if (!provider)
+                {
+                    alert('Not connected');
+                    return;
+                }
+                setIsLoading(true);
+                setAccountInfo(null);
+                try
+                {
+                    const acc = await provider.getAccount();
+                    setAccountInfo(acc);
+                } catch (error)
+                {
+                    console.error('Failed to get account:', error);
+                    alert('Failed to get account. See console.');
+                } finally
+                {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleLogout = () =>
+            {
+                loop.logout();
+                setAccount(null);
+                setProvider(null);
+                setHoldings([]);
+            };
+
+            const handleWalletTransfer = async () =>
+            {
+                if (!loop || !loop.wallet)
+                {
+                    alert('SDK not ready');
+                    return;
+                }
+                if (!transferRecipient || !transferAmount)
+                {
+                    alert('Enter recipient and amount');
+                    return;
+                }
+                const requestTimeoutMs = transferRequestTimeout ? Number(transferRequestTimeout) : undefined;
+                if (requestTimeoutMs !== undefined && Number.isNaN(requestTimeoutMs))
+                {
+                    alert('Request timeout must be a number (milliseconds).');
+                    return;
+                }
+                const message = customTxMessage.trim();
+                setIsTransferring(true);
+                setLastTxSource('transfer');
+                setTxUpdate(null);
+                setTxUpdateLog('');
+                setTransferResult(null);
+                try
+                {
+                    const now = new Date();
+                    const executeBefore = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+                    const memo = transferMemo.trim();
+                    const res = await loop.wallet.transfer(
+                        transferRecipient,
+                        transferAmount,
+                        {
+                            instrument_id: transferInstrumentId || 'Amulet',
+                            instrument_admin: transferInstrumentAdmin || undefined,
+                        },
+                        {
+                            requestedAt: now.toISOString(),
+                            executeBefore: executeBefore.toISOString(),
+                            requestTimeout: requestTimeoutMs,
+                            memo: memo || undefined,
+                            message: message || undefined,
+                            executionMode: executionMode,
+                            estimateTraffic: true,
+                        },
+                    );
+                    setTransferResult(res);
+                } catch (error)
+                {
+                    console.error('Transfer failed', error);
+                    setTransferResult(normalizeError(error, 'Transfer failed'));
+                } finally
+                {
+                    setIsTransferring(false);
+                }
+            };
+
+            const handleEstimateTransfer = async () =>
+            {
+                if (!provider)
+                {
+                    alert('Please connect first.');
+                    return;
+                }
+                if (!transferRecipient || !transferAmount)
+                {
+                    alert('Enter recipient and amount');
+                    return;
+                }
+
+                setIsEstimatingTransfer(true);
+                setTransferEstimate(null);
+                try
+                {
+                    const now = new Date();
+                    const executeBefore = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+                    const memo = transferMemo.trim();
+                    const preparedPayload = await provider.connection.prepareTransfer(
+                        provider.getAuthToken(),
+                        {
+                            recipient: transferRecipient,
+                            amount: String(transferAmount),
+                            instrument: {
+                                instrument_id: transferInstrumentId || 'Amulet',
+                                instrument_admin: transferInstrumentAdmin || undefined,
+                            },
+                            requested_at: now.toISOString(),
+                            execute_before: executeBefore.toISOString(),
+                            memo: memo || undefined,
+                        },
+                    );
+
+                    const gasEstimate = await provider.estimateGas({
+                        commands: preparedPayload.commands,
+                        disclosedContracts: preparedPayload.disclosedContracts,
+                        packageIdSelectionPreference: preparedPayload.packageIdSelectionPreference,
+                        actAs: preparedPayload.actAs,
+                        readAs: preparedPayload.readAs,
+                        synchronizerId: preparedPayload.synchronizerId,
+                    });
+
+                    setTransferEstimate(gasEstimate);
+                } catch (error)
+                {
+                    console.error('Failed to estimate transfer gas', error);
+                    setTransferEstimate(normalizeError(error, 'Failed to estimate transfer gas'));
+                } finally
+                {
+                    setIsEstimatingTransfer(false);
+                }
+            };
+
+            const handleFindContract = async () =>
+            {
+                if (!provider || !templateId)
+                {
+                    alert('Please connect and enter a template ID.');
+                    return;
+                }
+                setIsFindingContract(true);
+                setActiveContract([]);
+                try
+                {
+                    const contracts = await provider.getActiveContracts({ templateId });
+                    console.log('Found contracts:', contracts);
+                    if (contracts && contracts.length > 0)
+                    {
+                        setActiveContract(contracts);
+                    } else
+                    {
+                        alert('No active contract found with that template ID.');
+                    }
+                } catch (error)
+                {
+                    console.error('Failed to find active contract:', error);
+                    alert('Failed to find active contract. See console.');
+                } finally
+                {
+                    setIsFindingContract(false);
+                }
+            };
+
+            const handleFindContractByInterface = async () =>
+            {
+                if (!provider || !interfaceId)
+                {
+                    alert('Please connect and enter an Interface ID.');
+                    return;
+                }
+                setIsFindingByInterface(true);
+                setContractByInterface([]);
+                try
+                {
+                    console.log('Finding contract by interface:', interfaceId);
+                    const contracts = await provider.getActiveContracts({ interfaceId });
+                    console.log('Found contract by interface:', contracts);
+                    if (contracts && contracts.length > 0)
+                    {
+                        setContractByInterface(contracts);
+                    } else
+                    {
+                        alert('No active contract found with that interface ID.');
+                    }
+                } catch (error)
+                {
+                    console.error('Failed to find active contract by interface:', error);
+                    alert('Failed to find active contract by interface. See console.');
+                } finally
+                {
+                    setIsFindingByInterface(false);
+                }
+            };
+
+            const handleRunTransaction = async () =>
+            {
+                if (!provider)
+                {
+                    alert('Please connect first.');
+                    return;
+                }
+                setIsSubmittingTx(true);
+                setLastTxSource('run');
+                setTxUpdate(null);
+                setTxUpdateLog('');
+                setTxResult(null);
+                try
+                {
+                    const command = JSON.parse(damlCommand);
+                    const message = customTxMessage?.trim();
+                    const dedupSeconds = txDedupSeconds.trim() ? Number(txDedupSeconds.trim()) : undefined;
+                    if (dedupSeconds !== undefined && (!Number.isFinite(dedupSeconds) || dedupSeconds < 0))
+                    {
+                        alert('Dedup seconds must be a non-negative number.');
+                        return;
+                    }
+                    const submitFn = executionMode === 'wait'
+                        ? provider.submitAndWaitForTransaction.bind(provider)
+                        : provider.submitTransaction.bind(provider);
+                    const result = await submitFn(command, {
+                        message: message || undefined,
+                        estimateTraffic: true,
+                        deduplicationPeriod: dedupSeconds !== undefined ? { seconds: dedupSeconds } : undefined,
+                    });
+                    setTxResult(result);
+                } catch (error)
+                {
+                    console.error('Failed to submit transaction:', error);
+                    alert('Failed to submit transaction. See console.');
+                    setTxResult(normalizeError(error, 'Failed to submit transaction'));
+                } finally
+                {
+                    setIsSubmittingTx(false);
+                }
+            };
+
+            const handleEstimateTransaction = async () =>
+            {
+                if (!provider)
+                {
+                    alert('Please connect first.');
+                    return;
+                }
+                setIsEstimatingTx(true);
+                setTxEstimate(null);
+                try
+                {
+                    const command = JSON.parse(damlCommand);
+                    const result = await provider.estimateGas(command);
+                    setTxEstimate(result);
+                } catch (error)
+                {
+                    console.error('Failed to estimate transaction gas:', error);
+                    alert('Failed to estimate transaction gas. See console.');
+                    setTxEstimate(normalizeError(error, 'Failed to estimate transaction gas'));
+                } finally
+                {
+                    setIsEstimatingTx(false);
+                }
+            };
+
+            const handleWithdrawUsdc = async () =>
+            {
+                if (!loop || !loop.wallet)
+                {
+                    alert('SDK not ready');
+                    return;
+                }
+                if (!withdrawRecipient || !withdrawAmount)
+                {
+                    alert('Enter recipient and amount');
+                    return;
+                }
+                const requestTimeoutMs = withdrawRequestTimeout ? Number(withdrawRequestTimeout) : undefined;
+                if (requestTimeoutMs !== undefined && Number.isNaN(requestTimeoutMs))
+                {
+                    alert('Request timeout must be a number (milliseconds).');
+                    return;
+                }
+                const message = customTxMessage.trim();
+
+                setIsWithdrawing(true);
+                setLastTxSource('withdraw');
+                setTxUpdate(null);
+                setTxUpdateLog('');
+                setWithdrawResult(null);
+                try
+                {
+                    const res = await loop.wallet.extension.usdcBridge.withdrawalUSDCxToEthereum(
+                        withdrawRecipient,
+                        withdrawAmount,
+                        {
+                            reference: withdrawReference || undefined,
+                            requestTimeout: requestTimeoutMs,
+                            message: message || undefined,
+                        },
+                    );
+                    setWithdrawResult(res);
+                } catch (error)
+                {
+                    console.error('Withdrawal failed', error);
+                    setWithdrawResult(normalizeError(error, 'Withdrawal failed'));
+                } finally
+                {
+                    setIsWithdrawing(false);
+                }
+            };
+
+            const handleSignMessage = async () =>
+            {
+                if (!provider)
+                {
+                    alert('Please connect first.');
+                    return;
+                }
+                setIsSigning(true);
+                setSignature(null);
+                try
+                {
+                    const result = await provider.signMessage(rawMessage);
+                    setSignature(result);
+                } catch (error)
+                {
+                    console.error('Failed to sign message:', error);
+                    alert('Failed to sign message. See console.');
+                    setSignature({ error: error.message });
+                } finally
+                {
+                    setIsSigning(false);
+                }
+            };
+
+            const txPayload = txUpdate || txResult;
+            const commandId = txPayload?.command_id || '';
+            const submissionId = txPayload?.submission_id || '';
+            const updateId = txPayload?.update_id || '';
+            const updateDataText = txPayload?.update_data ? JSON.stringify(txPayload.update_data, null, 2) : '';
+            const status = txPayload?.status || '';
+            const errorMessage = txPayload?.error?.error_message || '';
+            const submissionCommandId = txResult?.command_id || '';
+            const submissionIdOnly = txResult?.submission_id || '';
+            const submissionEstimatedTrafficText = txResult?.estimated_traffic
+                ? JSON.stringify(txResult.estimated_traffic, null, 2)
+                : '';
+            const submissionError = txResult?.error || '';
+            const submissionErrorCode = txResult?.code || '';
+            const transferSubmissionCommandId = transferResult?.command_id || '';
+            const transferSubmissionIdOnly = transferResult?.submission_id || '';
+            const transferEstimatedTrafficText = transferResult?.estimated_traffic
+                ? JSON.stringify(transferResult.estimated_traffic, null, 2)
+                : '';
+            const transferError = transferResult?.error || '';
+            const transferErrorCode = transferResult?.code || '';
+            const lighthouseBaseUrl = getLighthouseBaseUrl(networkEnv);
+            const updateUrl = updateId ? `${lighthouseBaseUrl}/transactions/${updateId}` : '';
+            const estimatedTrafficText = txPayload?.estimated_traffic
+                ? JSON.stringify(txPayload.estimated_traffic, null, 2)
+                : '';
+            const broadcastText = lastBroadcast ? JSON.stringify(lastBroadcast, null, 2) : '';
+            const txSummarySection = txPayload ? html`
+                <div style="margin-top: 20px; color: #444;">
+                    Transaction Result (${txUpdateLog || 'unknown timestamp'}):
+                </div>
+                <div style="margin-top: 6px; background: #f4f4f4; padding: 10px; border-radius: 5px;">
+                    <div style="font-family: monospace; margin-bottom: 6px;">command_id: ${commandId || 'n/a'}</div>
+                    <div style="font-family: monospace; margin-bottom: 6px;">submission_id: ${submissionId || 'n/a'}</div>
+                    <div style="font-family: monospace; margin-bottom: 6px;">update_id: ${updateId || 'n/a'}</div>
+                    ${status ? html`<div style="font-family: monospace; margin-bottom: 6px;">status: ${status}</div>` : ''}
+                    ${errorMessage ? html`<div style="font-family: monospace; margin-bottom: 6px; color: #b00020;">error: ${errorMessage}</div>` : ''}
+                    ${updateUrl ? html`
+                        <a href=${updateUrl} target="_blank" rel="noopener noreferrer">${updateUrl}</a>
+                    ` : ''}
+                    ${estimatedTrafficText ? html`
+                        <details style="margin-top: 10px;">
+                            <summary style="cursor: pointer;">estimated traffic</summary>
+                            <pre style="margin-top: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto;">${estimatedTrafficText}</pre>
+                        </details>
+                    ` : ''}
+                    <details style="margin-top: 10px;">
+                        <summary style="cursor: pointer;">update data</summary>
+                        <pre style="margin-top: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto;">${updateDataText || 'No transaction data available.'}</pre>
+                    </details>
+                </div>
+            ` : '';
+            const txSubmissionSection = txResult ? html`
+                <div style="margin-top: 12px; background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                    <div style="font-family: monospace; margin-bottom: 6px;">command_id: ${submissionCommandId || 'n/a'}</div>
+                    <div style="font-family: monospace;">submission_id: ${submissionIdOnly || 'n/a'}</div>
+                    ${submissionError ? html`
+                        <div style="font-family: monospace; margin-top: 8px; color: #b00020;">error: ${submissionError}</div>
+                    ` : ''}
+                    ${submissionErrorCode ? html`
+                        <div style="font-family: monospace; margin-top: 4px; color: #b00020;">code: ${submissionErrorCode}</div>
+                    ` : ''}
+                    ${submissionEstimatedTrafficText ? html`
+                        <details style="margin-top: 10px;">
+                            <summary style="cursor: pointer;">estimated traffic</summary>
+                            <pre style="margin-top: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto;">${submissionEstimatedTrafficText}</pre>
+                        </details>
+                    ` : ''}
+                </div>
+            ` : '';
+            const transferSubmissionSection = transferResult ? html`
+                <div style="margin-top: 12px; background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                    <div style="font-family: monospace; margin-bottom: 6px;">command_id: ${transferSubmissionCommandId || 'n/a'}</div>
+                    <div style="font-family: monospace;">submission_id: ${transferSubmissionIdOnly || 'n/a'}</div>
+                    ${transferError ? html`
+                        <div style="font-family: monospace; margin-top: 8px; color: #b00020;">error: ${transferError}</div>
+                    ` : ''}
+                    ${transferErrorCode ? html`
+                        <div style="font-family: monospace; margin-top: 4px; color: #b00020;">code: ${transferErrorCode}</div>
+                    ` : ''}
+                    ${transferEstimatedTrafficText ? html`
+                        <details style="margin-top: 10px;">
+                            <summary style="cursor: pointer;">estimated traffic</summary>
+                            <pre style="margin-top: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto;">${transferEstimatedTrafficText}</pre>
+                        </details>
+                    ` : ''}
+                </div>
+            ` : '';
+            const transferEstimateSection = transferEstimate ? html`
+                <div style="margin-top: 12px; background: #eef6ff; padding: 10px; border-radius: 5px;">
+                    <pre style="margin: 0; white-space: pre-wrap; max-height: 240px; overflow: auto;">${JSON.stringify(transferEstimate, null, 2)}</pre>
+                </div>
+            ` : '';
+            const broadcastSection = lastBroadcast ? html`
+                <div style="margin-top: 12px; background: #eef6ff; padding: 10px; border-radius: 5px;">
+                    <div style="font-family: monospace; margin-bottom: 6px;">last ws message type: ${lastBroadcast?.type || 'n/a'}</div>
+                    <div style="font-family: monospace; margin-bottom: 6px;">request_id: ${lastBroadcast?.request_id || 'n/a'}</div>
+                    <details>
+                        <summary style="cursor: pointer;">raw ws message</summary>
+                        <pre style="margin-top: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto;">${broadcastText}</pre>
+                    </details>
+                </div>
+            ` : '';
+            const txEstimateSection = txEstimate ? html`
+                <div style="margin-top: 12px; background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                    <pre style="margin: 0; white-space: pre-wrap; max-height: 240px; overflow: auto;">${JSON.stringify(txEstimate, null, 2)}</pre>
+                </div>
+            ` : '';
+
+            const handleGetConnectUrl = () =>
+            {
+                const url = loop.getConnectUrl();
+                console.log('Connect URL:', url);
+                alert('Connect URL: ' + url);
+            };
+
+            return html`
+                <div>
+                    <h1>Loop SDK Preact Test</h1>
+                    ${account ? html`
+                        <div>
+                            <h2>Connected!</h2>
+                            <p>Party ID: ${account.partyId}</p>
+                            <p>Puplic Key: ${account.publicKey}</p>
+
+                            <button onClick=${handleLogout}>
+                                Logout
+                            </button>
+
+                            <button onClick=${handleGetAccount} disabled=${isLoading}>
+                                ${isLoading ? 'Loading...' : 'Get Account Info'}
+                            </button>
+
+                            <button onClick=${handleGetConnectUrl}>
+                                Get Connect URL
+                            </button>
+
+                            ${accountInfo && !isLoading && html`
+                                <div style="margin-top: 10px; padding: 10px; background: #f4f4f4; border-radius: 5px;">
+                                    <h4>Account Info:</h4>
+                                    <p>Email: ${accountInfo.email}</p>
+                                    <p>Pre-approval: ${accountInfo.has_preapproval ? 'enabled' : 'not enabled'}</p>
+                                    <p>UTXO merge delegation: ${accountInfo.has_merge_delegation ? 'enabled' : 'not enabled'}</p>
+                                    <p>USDC Bridge Access: ${accountInfo.usdc_bridge_access}</p>
+                                </div>
+                            `}
+
+                            <hr style="margin: 20px 0;" />
+                            <button onClick=${handleGetHolding} disabled=${isLoading}>
+                                ${isLoading ? 'Loading...' : 'Get Holdings'}
+                            </button>
+
+                            ${holdings.length > 0 && !isLoading && html`
+                                <h3>Your Holdings:</h3>
+                                <ul>
+                                    ${holdings.map(h => html`
+                                        <li>
+                                            <strong>${h.symbol}</strong>: 
+                                            ${(parseFloat(h.total_unlocked_coin) + parseFloat(h.total_locked_coin)).toFixed(h.decimals)}
+                                            <br />
+                                            <small>Instrument ID: ${h.instrument_id.id}</small>
+                                            <br />
+                                            <small>Instrument Admin: ${h.instrument_id.admin}</small>
+                                        </li>
+                                    `)}
+                                </ul>
+                            `}
+                            <hr style="margin: 20px 0;" />
+
+                            <div>
+                                <h3>Custom Signing Message (optional)</h3>
+                                <p>This message will be shown to the user in the wallet signing modal.</p>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. My Test DApp is requesting permission to submit a transaction"
+                                    value=${customTxMessage}
+                                    onInput=${(e) => setCustomTxMessage(e.target.value)}
+                                    style="width: 100%; margin-bottom: 8px;"
+                                />
+                                <button onClick=${() => setCustomTxMessage('')}>Clear</button>
+                            </div>
+
+                            <hr style="margin: 20px 0;" />
+
+                            <div>
+                                <h4>Find Active Contract By Template ID</h4>
+                                <p>Eg, <span>#splice-amulet:Splice.Amulet:Amulet</span></p>
+                                <input type="text" value=${templateId} onInput=${(e) => setTemplateId(e.target.value)} placeholder="Enter Template ID" style="margin-right: 10px;" />
+                                <button onClick=${handleFindContract} disabled=${isFindingContract}>
+                                    ${isFindingContract ? 'Finding...' : 'Find Active Contract'}
+                                </button>
+                            </div>
+
+                            ${activeContract.length > 0 && !isFindingContract && html`
+                                <div style="margin-top: 20px;">
+                                    <h5>Found Contract IDs:</h5>
+                                    <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px;">${JSON.stringify(activeContract.map(c => c?.contractEntry?.JsActiveContract?.createdEvent?.contractId).filter(Boolean), null, 2)}</pre>
+                                    <h5>Found Contract Details:</h5>
+                                    ${activeContract.map(contract => html`
+                                        <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px;">${JSON.stringify(contract, null, 2)}</pre>
+                                    `)}
+                                </div>
+                            `}
+
+                            <hr style="margin: 20px 0;" />
+
+                            <div>
+                                <h4>Find Active Contract By Interface ID</h4>
+                                <p>Eg, <span>#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding</span></p>
+                                <input type="text" value=${interfaceId} onInput=${(e) => setInterfaceId(e.target.value)} placeholder="Enter Interface ID" style="margin-right: 10px;" />
+                                <button onClick=${handleFindContractByInterface} disabled=${isFindingByInterface}>
+                                    ${isFindingByInterface ? 'Finding...' : 'Find by Interface'}
+                                </button>
+                            </div>
+
+                            ${contractByInterface.length > 0 && !isFindingByInterface && html`
+                                <div style="margin-top: 20px;">
+                                    <h5>Found Contract by Interface IDs:</h5>
+                                    <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px;">${JSON.stringify(contractByInterface.map(c => c?.contractEntry?.JsActiveContract?.createdEvent?.contractId).filter(Boolean), null, 2)}</pre>
+                                    <h5>Found Contract by Interface Details:</h5>
+                                    ${contractByInterface.map(contract => html`
+                                        <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px;">${JSON.stringify(contract, null, 2)}</pre>
+                                    `)}
+                                </div>
+                            `}
+
+                            <div>
+                                <h3>Sign Raw Message</h3>
+                                <input 
+                                    type="text"
+                                    style="width: 100%; font-family: monospace; margin-bottom: 10px;"
+                                    value=${rawMessage}
+                                    onInput=${(e) => setRawMessage(e.target.value)}
+                                />
+                                <button onClick=${handleSignMessage} disabled=${isSigning}>
+                                    ${isSigning ? 'Signing...' : 'Sign'}
+                                </button>
+                            </div>
+
+                            ${signature && !isSigning && html`
+                                <div style="margin-top: 20px;">
+                                    <h5>Signature:</h5>
+                                    <pre style="background: #f4f4f4; padding: 10px; border-radius: 5px;">${JSON.stringify(signature, null, 2)}</pre>
+                                </div>
+                            `}
+
+                            <hr style="margin: 20px 0;" />
+
+                            <div>
+                                <h3>Commit Mode</h3>
+                                <p>Choose how the wallet submits transactions: async returns immediately; wait returns once the ledger update is ready.</p>
+                                <label style="font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                                    Commit Mode:
+                                    <select
+                                        value=${executionMode}
+                                        onChange=${(e) => setExecutionMode(e.target.value)}
+                                    >
+                                        <option value="async">async</option>
+                                        <option value="wait">wait</option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <hr style="margin: 20px 0;" />
+
+                            <div>
+                                <h3>Transfer Helper</h3>
+                                <p>Instrument admin/id and timeout are optional; leave blank to default to Amulet/DSO/300000ms.</p>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                                    <input
+                                        type="text"
+                                        placeholder="Recipient party"
+                                        value=${transferRecipient}
+                                        onInput=${(e) => setTransferRecipient(e.target.value)}
+                                        style="flex: 1; min-width: 220px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Amount"
+                                        value=${transferAmount}
+                                        onInput=${(e) => setTransferAmount(e.target.value)}
+                                        style="width: 160px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Instrument admin (optional)"
+                                        value=${transferInstrumentAdmin}
+                                        onInput=${(e) => setTransferInstrumentAdmin(e.target.value)}
+                                        style="flex: 1; min-width: 260px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Instrument id (optional)"
+                                        value=${transferInstrumentId}
+                                        onInput=${(e) => setTransferInstrumentId(e.target.value)}
+                                        style="width: 180px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Timeout ms (optional)"
+                                        value=${transferRequestTimeout}
+                                        onInput=${(e) => setTransferRequestTimeout(e.target.value)}
+                                        style="width: 220px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Memo (optional)"
+                                        value=${transferMemo}
+                                        onInput=${(e) => setTransferMemo(e.target.value)}
+                                        style="flex: 1; min-width: 240px;"
+                                    />
+                                </div>
+                                <button onClick=${handleEstimateTransfer} disabled=${isEstimatingTransfer} style="margin-top: 8px; margin-right: 8px;">
+                                    ${isEstimatingTransfer ? 'Estimating...' : 'Estimate Transfer Gas'}
+                                </button>
+                                <button onClick=${handleWalletTransfer} disabled=${isTransferring} style="margin-top: 8px;">
+                                    ${isTransferring ? 'Sending...' : 'Send'}
+                                </button>
+                                ${transferEstimateSection}
+                                ${lastTxSource === 'transfer' ? (executionMode === 'async' ? transferSubmissionSection : '') : ''}
+                                ${lastTxSource === 'transfer' ? (executionMode === 'async' ? (txUpdate ? txSummarySection : '') : txSummarySection) : ''}
+                            </div>
+
+                            <hr style="margin: 20px 0;" />
+                            
+                            <div>
+                                <h3>USDC Withdraw Helper</h3>
+                                <p>Reference and timeout are optional; enter recipient (ETH address) and amount.</p>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                                    <input
+                                        type="text"
+                                        placeholder="Recipient (0x...)"
+                                        value=${withdrawRecipient}
+                                        onInput=${(e) => setWithdrawRecipient(e.target.value)}
+                                        style="flex: 1; min-width: 240px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Amount"
+                                        value=${withdrawAmount}
+                                        onInput=${(e) => setWithdrawAmount(e.target.value)}
+                                        style="width: 160px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Reference (optional)"
+                                        value=${withdrawReference}
+                                        onInput=${(e) => setWithdrawReference(e.target.value)}
+                                        style="flex: 1; min-width: 220px;"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Timeout ms (optional)"
+                                        value=${withdrawRequestTimeout}
+                                        onInput=${(e) => setWithdrawRequestTimeout(e.target.value)}
+                                        style="width: 200px;"
+                                    />
+                                </div>
+                                <button onClick=${handleWithdrawUsdc} disabled=${isWithdrawing} style="margin-top: 8px;">
+                                    ${isWithdrawing ? 'Submitting...' : 'Withdraw USDC'}
+                                </button>
+                                ${lastTxSource === 'withdraw' ? txSummarySection : ''}
+                            </div>
+                            
+                            <hr style="margin: 20px 0;" />
+                            
+                            <div>
+                                <h3>Run DAML Transaction</h3>
+                                <p>Example below is a DAML command For Amulet Transfer on devnet. Make sure to incldue the Factory Disclosure. Put a fixed <code>commandId</code> in the JSON payload if you want to test Canton deduplication retries.</p>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                                    <input
+                                        type="text"
+                                        placeholder="Dedup seconds (optional, e.g. 60)"
+                                        value=${txDedupSeconds}
+                                        onInput=${(e) => setTxDedupSeconds(e.target.value)}
+                                        style="width: 260px;"
+                                    />
+                                </div>
+                                <textarea 
+                                    style="width: 100%; height: 150px; font-family: monospace;"
+                                    value=${damlCommand}
+                                    onInput=${(e) => setDamlCommand(e.target.value)}
+                                ></textarea>
+                                <button onClick=${handleEstimateTransaction} disabled=${isEstimatingTx} style="margin-top: 10px; margin-right: 8px;">
+                                    ${isEstimatingTx ? 'Estimating...' : 'Estimate Gas'}
+                                </button>
+                                <button onClick=${handleRunTransaction} disabled=${isSubmittingTx} style="margin-top: 10px;">
+                                    ${isSubmittingTx ? 'Submitting...' : 'Run'}
+                                </button>
+                                ${txEstimateSection}
+                            </div>
+
+                            ${lastTxSource === 'run' ? (executionMode === 'async' ? txSubmissionSection : '') : ''}
+                            ${lastTxSource === 'run' ? (executionMode === 'async' ? (txUpdate ? txSummarySection : '') : txSummarySection) : ''}
+                            ${broadcastSection}
+
+                        </div>
+                    ` : html`
+                        <button onClick=${handleConnect}>Connect</button>
+                    `}
+                </div>
+            `;
+        }
+
+        render(html`<${App} />`, document.getElementById('app'));
+    </script>
+</body>
+
+</html>
