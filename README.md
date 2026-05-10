@@ -13,3 +13,167 @@
 ---
 
 # TEMPLEBOT REWARD UP TO 5000 CC /DAY [SOURCE](https://t.me/airdropasc/86436)
+
+## Features
+
+* Support Multi-account
+* Auto settlement detection
+* Auto recycle Temple balance
+* Auto deposit
+* Auto switch mode
+* Telegram control & monitoring
+* Gas fee deposit tracking
+* Pending trade settlement protection
+* Long-running stable cycle bot
+
+---
+
+# Install
+
+## Install NodeJS
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+```
+
+## Clone Repository
+
+```bash
+git clone https://github.com/sipalingnode/templebot.git
+cd templebot
+```
+
+## Install Dependencies
+
+```bash
+npm install
+```
+
+---
+
+## Create Telegram Bot
+* Open [BotFather](https://t.me/BotFather)
+* Send: `/newbot`
+* Enter bot name & username
+* Copy the BOT TOKEN
+## Get Telegram Chat ID
+* Open [GetID](https://t.me/userinfobot)
+* Send: /start
+* Copy your Chat ID
+
+---
+
+# Paste Bot Token & Chat ID di ENV
+```
+nano .env
+```
+**Save file .env dengan `CTRL+X+Y lalu Enter`**
+
+---
+
+# Add Account & Running Bot
+
+**Jalankan bot**
+
+```
+node bot.js
+```
+
+**Lalu buka Telegram bot.**
+
+**Command**
+
+```
+/startbot
+/addaccount
+```
+
+**Isi data**
+
+* **Nama akun**
+* **API Key**
+* **Loop Private Key**
+* **Party ID**
+
+---
+
+# Telegram Commands
+
+## Start Menu
+
+```
+/startbot
+```
+
+## Run Bot
+
+```
+/runbot
+```
+
+## Stop Bot
+
+```
+/stopbot
+```
+
+## Set Delay
+
+```
+/setdelay 30
+```
+
+## Change Mode
+
+```
+/mode buy
+```
+
+**atau**
+
+```
+/mode sell
+```
+
+## Check Temple Balance
+
+```
+/balance
+```
+
+## Check Loop Wallet
+
+```
+/wallet
+```
+
+## Deposit Manual
+
+```
+/deposit 1 100 cc
+```
+
+**atau**
+
+```
+/deposit 1 100 usdcx
+```
+
+## Check CC Price
+
+```
+/checkprice
+```
+
+## Check Gas Fee
+
+```
+/gasfee
+```
+
+## Detail Settings
+
+```
+/detailset
+```
