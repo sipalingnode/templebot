@@ -10,15 +10,5 @@
     "slippagePct": 0.1,
     "dryRun": false
   },
-  "accounts": [
-    {
-      "name": "acc1",
-      "apiKey": "isiapikeytemple",
-      "loopPrivateKey": "isiprivatekeyloop",
-      "partyId": "isiaddressloop",
-      "network": "mainnet",
-      "orderType": "market",
-      "side": "buy"
-    }
-  ]
+  "accounts": []
 }
