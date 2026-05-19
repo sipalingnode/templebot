@@ -116,7 +116,7 @@ function formatSimple(
   return [
     `[${accName}] ${typeText} ${sideText}`,
     convertText,
-    `[${accName}] PRICE ${Number(price || 0).toFixed(4)}`,
+    `[${accName}] PRICE ${symbol === 'CBTC/USDA' ? Number(price || 0).toFixed(0) : Number(price || 0).toFixed(4)}`,
     `[${accName}] ${status}`
   ].join('\n');
 }
