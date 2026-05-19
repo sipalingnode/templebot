@@ -1568,11 +1568,9 @@ bot.onText(/^\/checkprice$/, async (msg) => {
 
   try {
 
-    const data =
-      getAccountsData();
+    const data = getAccountsData();
 
-    const acc =
-      data.accounts?.[0];
+    const acc = data.accounts?.[0];
 
     if (!acc?.apiKey) {
 
@@ -1584,18 +1582,16 @@ bot.onText(/^\/checkprice$/, async (msg) => {
       return;
     }
 
-    const price =
-      state.market === 'CBTC/USDA'
-        ? await getCbtcPrice(
-            acc.apiKey
-          )
-        : await getCcPrice(
-            acc.apiKey
-          );
+    const ccPrice =
+      await getCcPrice(acc.apiKey);
+
+    const cbtcPrice =
+      await getCbtcPrice(acc.apiKey);
 
     await bot.sendMessage(
       chatId,
-      `Price ${state.market}: ${Number(price).toFixed(4)}`
+      `Price CC/USDCx: ${Number(ccPrice).toFixed(4)}\n` +
+      `Price CBTC/USDA: ${Number(cbtcPrice).toFixed(0)}`
     );
 
   } catch (e) {
