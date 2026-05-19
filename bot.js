@@ -4,7 +4,7 @@ import path from 'path';
 import { config } from './config.js';
 import { log, error } from './logger.js';
 import { loop, initLoopServerForAccount, checkAndPayDueGas } from './loop-server.js';
-import { runStrategyForAccount, getCcPrice, waitAllOrdersSettled, waitTradesSettled} from './strategy.js';
+import { runStrategyForAccount, getCcPrice, getCbtcPrice, waitAllOrdersSettled, waitTradesSettled } from './strategy.js';
 import { initialize, getTradingBalance, prepareDepositHoldings, depositFunds} from '@temple-digital-group/temple-canton-js';
 import { execSync } from 'child_process';
 
@@ -31,6 +31,11 @@ const state = {
   delayMs: 30000,
   queueBusy: false,
   mode: 'buy',
+
+  market: 'CC/USDCx',
+
+  selectingMarket: false,
+
   lastChatId: null
 };
 
@@ -229,20 +234,43 @@ async function getLoopWalletBalances(index) {
 
   let cc = 0;
   let usdcx = 0;
+  let cbtc = 0;
+  let usda = 0;
 
   for (const h of arr) {
     const instrument = h?.instrument_id || {};
-    const id = String(instrument.id || instrument.instrument_id || h?.asset || '').toLowerCase();
-    const unlocked = Number(h?.total_unlocked_coin ?? 0);
+
+    const id = String(
+      instrument.id ||
+      instrument.instrument_id ||
+      h?.asset ||
+      ''
+    ).toLowerCase();
+
+    const unlocked = Number(
+      h?.total_unlocked_coin ?? 0
+    );
 
     if (id === 'amulet' || id === 'cc') {
       cc += unlocked;
+
     } else if (id === 'usdcx') {
       usdcx += unlocked;
+
+    } else if (id === 'cbtc') {
+      cbtc += unlocked;
+
+    } else if (id === 'usda') {
+      usda += unlocked;
     }
   }
 
-  return { cc, usdcx };
+  return {
+    cc,
+    usdcx,
+    cbtc,
+    usda
+  };
 }
 
 async function waitAndPayDueGas(index, extra = {}, opts = {}) {
@@ -307,7 +335,7 @@ function menuText() {
     '/detailset - lihat detail setting',
     '/runbot - jalankan bot',
     '/stopbot - hentikan loop trading',
-    '/checkprice - Cek harga CC'
+    '/checkprice - Cek harga token'
   ].join('\n');
 }
 
@@ -319,9 +347,14 @@ function formatAutoDeposit(
   status
 ) {
 
+  const decimals =
+    ['cbtc', 'usda'].includes(asset.toLowerCase())
+      ? 4
+      : 0;
+
   return [
     `[${accName}] AUTO DEPOSIT`,
-    `[${accName}] ${Number(amount).toFixed(0)} ${asset.toUpperCase()} => TEMPLE`,
+    `[${accName}] ${Number(amount).toFixed(decimals)} ${asset.toUpperCase()} => TEMPLE`,
     `[${accName}] FEE ${Number(feeCc || 0).toFixed(6)} CC`,
     `[${accName}] ${status}`
   ].join('\n');
@@ -338,179 +371,177 @@ async function autoDepositAll(
 
   const MIN_USDCX_DEPOSIT = 5;
 
+  const MIN_CBTC_DEPOSIT =
+    0.0001;
+
+  const MIN_USDA_DEPOSIT = 1;
+
   const wallet =
-    await getLoopWalletBalances(index);
+    await getLoopWalletBalances(
+      index
+    );
 
   console.log(
     `[WALLET] ${acc.name} | ` +
     `${wallet.cc.toFixed(3)} CC | ` +
-    `${wallet.usdcx.toFixed(3)} USDCx`
+    `${wallet.usdcx.toFixed(3)} USDCx | ` +
+    `${wallet.cbtc.toFixed(4)} CBTC | ` +
+    `${wallet.usda.toFixed(3)} USDA`
   );
 
-  if (
-    state.mode === 'buy' &&
-    wallet.cc >
-    SAFE_CC + MIN_CC_DEPOSIT
-  ) {
+  const market =
+    state.market || 'CC/USDCx';
 
-    const depositAmount =
-      Math.floor(
-        wallet.cc - SAFE_CC
-      );
+  const isCbtc =
+    market === 'CBTC/USDA';
 
-    if (depositAmount <= 0) {
-      return;
+  let asset = '';
+
+  let depositAmount = 0;
+
+  if (state.mode === 'buy') {
+
+    if (isCbtc) {
+
+      if (
+        wallet.cbtc <
+        MIN_CBTC_DEPOSIT
+      ) {
+        return;
+      }
+
+      asset = 'cbtc';
+
+      depositAmount =
+        Number(
+          wallet.cbtc.toFixed(4)
+        );
+
+    } else {
+
+      if (
+        wallet.cc <=
+        SAFE_CC +
+        MIN_CC_DEPOSIT
+      ) {
+        return;
+      }
+
+      asset = 'cc';
+
+      depositAmount =
+        Math.floor(
+          wallet.cc - SAFE_CC
+        );
     }
 
-    try {
+  } else {
 
-      const tx =
-        await templeDeposit(
-          acc,
-          depositAmount,
-          'cc',
-          index
-        );
+    if (isCbtc) {
 
-      const feeCc =
-        Number.parseFloat(
-          tx?.feeSummary?.feeCc
-        ) || 0;
-
-      if (feeCc > 0) {
-
-        addAccumulatedFee(
-          index,
-          feeCc
-        );
+      if (
+        wallet.usda <
+        MIN_USDA_DEPOSIT
+      ) {
+        return;
       }
 
-      const logText =
-        formatAutoDeposit(
-          acc.name,
-          'cc',
-          depositAmount,
-          feeCc,
-          'SUCCESS'
-        );
+      asset = 'usda';
 
-      console.log(logText);
+      depositAmount =
+        Number(wallet.usda.toFixed(2));
 
-      if (state.lastChatId) {
+    } else {
 
-        await bot.sendMessage(
-          state.lastChatId,
-          logText
-        );
+      if (
+        wallet.usdcx <
+        MIN_USDCX_DEPOSIT
+      ) {
+        return;
       }
 
-    } catch (e) {
+      asset = 'usdcx';
 
-      const logText =
-        formatAutoDeposit(
-          acc.name,
-          'cc',
-          depositAmount,
-          0,
-          'FAILED'
-        );
-
-      console.log(logText);
-
-      if (state.lastChatId) {
-
-        await bot.sendMessage(
-          state.lastChatId,
-          logText
-        );
-      }
-
-      console.log(
-        `[AUTO DEPOSIT ERROR] ${e?.message || e}`
-      );
+      depositAmount =
+        Math.floor(wallet.usdcx);
     }
   }
 
   if (
-    state.mode === 'sell' &&
-    wallet.usdcx >
-    MIN_USDCX_DEPOSIT
+    !Number.isFinite(
+      depositAmount
+    ) ||
+    depositAmount <= 0
   ) {
+    return;
+  }
 
-    const depositAmount =
-      Math.floor(wallet.usdcx);
+  try {
 
-    if (depositAmount <= 0) {
-      return;
-    }
+    const tx =
+      await templeDeposit(
+        acc,
+        depositAmount,
+        asset,
+        index
+      );
 
-    try {
+    const feeCc =
+      Number.parseFloat(
+        tx?.feeSummary?.feeCc
+      ) || 0;
 
-      const tx =
-        await templeDeposit(
-          acc,
-          depositAmount,
-          'usdcx',
-          index
-        );
+    if (feeCc > 0) {
 
-      const feeCc =
-        Number.parseFloat(
-          tx?.feeSummary?.feeCc
-        ) || 0;
-
-      if (feeCc > 0) {
-
-        addAccumulatedFee(
-          index,
-          feeCc
-        );
-      }
-
-      const logText =
-        formatAutoDeposit(
-          acc.name,
-          'usdcx',
-          depositAmount,
-          feeCc,
-          'SUCCESS'
-        );
-
-      console.log(logText);
-
-      if (state.lastChatId) {
-
-        await bot.sendMessage(
-          state.lastChatId,
-          logText
-        );
-      }
-
-    } catch (e) {
-
-      const logText =
-        formatAutoDeposit(
-          acc.name,
-          'usdcx',
-          depositAmount,
-          0,
-          'FAILED'
-        );
-
-      console.log(logText);
-
-      if (state.lastChatId) {
-
-        await bot.sendMessage(
-          state.lastChatId,
-          logText
-        );
-      }
-
-      console.log(
-        `[AUTO DEPOSIT ERROR] ${e?.message || e}`
+      addAccumulatedFee(
+        index,
+        feeCc
       );
     }
+
+    const logText =
+      formatAutoDeposit(
+        acc.name,
+        asset,
+        depositAmount,
+        feeCc,
+        'SUCCESS'
+      );
+
+    console.log(logText);
+
+    if (state.lastChatId) {
+
+      await bot.sendMessage(
+        state.lastChatId,
+        logText
+      );
+    }
+
+  } catch (e) {
+
+    const logText =
+      formatAutoDeposit(
+        acc.name,
+        asset,
+        depositAmount,
+        0,
+        'FAILED'
+      );
+
+    console.log(logText);
+
+    if (state.lastChatId) {
+
+      await bot.sendMessage(
+        state.lastChatId,
+        logText
+      );
+    }
+
+    console.log(
+      `[AUTO DEPOSIT ERROR] ${e?.message || e}`
+    );
   }
 }
 
@@ -518,13 +549,23 @@ async function runRoundRobin(chatId) {
 
   const data = getAccountsData();
 
-  const MIN_CC = 100;
-
   if (!data.accounts.length) {
     return;
   }
 
-  const cycleStartedAt = Date.now();
+  const market =
+    state.market || 'CC/USDCx';
+
+  const isCbtc =
+    market === 'CBTC/USDA';
+
+  const MIN_BASE =
+    isCbtc
+      ? 0.0001
+      : 100;
+
+  const cycleStartedAt =
+    Date.now();
 
   console.log(
     `[CYCLE START] ${new Date(cycleStartedAt).toLocaleString(
@@ -539,16 +580,26 @@ async function runRoundRobin(chatId) {
 
     let canContinue = false;
 
-    for (let i = 0; i < data.accounts.length; i++) {
+    for (
+      let i = 0;
+      i < data.accounts.length;
+      i++
+    ) {
 
       if (!state.running) {
 
-        console.log('[BOT] Trading stopped by user');
+        console.log(
+          '[BOT] Trading stopped by user'
+        );
+
         return;
       }
 
-      const acc = data.accounts[i];
-      const accName = acc.name || `akun ${i + 1}`;
+      const acc =
+        data.accounts[i];
+
+      const accName =
+        acc.name || `akun ${i + 1}`;
 
       try {
 
@@ -558,26 +609,51 @@ async function runRoundRobin(chatId) {
 
         const {
           ccValue,
-          usdcxValue
+          usdcxValue,
+          cbtcValue,
+          usdaValue
         } = await templeBalance(acc);
 
-        const cc = Number(ccValue);
-        const usdcx = Number(usdcxValue);
+        const baseBalance =
+          isCbtc
+            ? Number(cbtcValue)
+            : Number(ccValue);
 
-        const mode = state.mode;
+        const quoteBalance =
+          isCbtc
+            ? Number(usdaValue)
+            : Number(usdcxValue);
+
+        const mode =
+          state.mode;
 
         let size = 0;
+
         let useQuote = false;
 
         if (mode === 'sell') {
 
-          if (cc < MIN_CC * 2) {
+          if (
+            baseBalance <
+            MIN_BASE * 2
+          ) {
 
-            size = Math.floor(cc);
+            size = baseBalance;
 
           } else {
 
-            size = MIN_CC;
+            size = MIN_BASE;
+          }
+
+          if (isCbtc) {
+
+            size = Number(
+              Number(size).toFixed(4)
+            );
+
+          } else {
+
+            size = Math.floor(size);
           }
 
           useQuote = false;
@@ -585,19 +661,47 @@ async function runRoundRobin(chatId) {
 
         if (mode === 'buy') {
 
-          const ccPrice =
-            await getCcPrice(acc.apiKey);
+          const price =
+            isCbtc
+              ? await getCbtcPrice(
+                  acc.apiKey
+                )
+              : await getCcPrice(
+                  acc.apiKey
+                );
 
-          const maxBuyableCc =
-            Math.floor(usdcx / ccPrice);
+          const maxBuyable =
+            isCbtc
+              ? Number(
+                  (
+                    quoteBalance / price
+                  ).toFixed(4)
+                )
+              : Math.floor(
+                  quoteBalance / price
+                );
 
-          if (maxBuyableCc < MIN_CC * 2) {
+          if (
+            maxBuyable <
+            MIN_BASE * 2
+          ) {
 
-            size = maxBuyableCc;
+            size = maxBuyable;
 
           } else {
 
-            size = MIN_CC;
+            size = MIN_BASE;
+          }
+
+          if (isCbtc) {
+
+            size = Number(
+              Number(size).toFixed(4)
+            );
+
+          } else {
+
+            size = Math.floor(size);
           }
 
           useQuote = false;
@@ -615,8 +719,13 @@ async function runRoundRobin(chatId) {
         const merged = {
           ...data.common,
           ...acc,
-          orderSize: Number(size.toFixed(6)),
+
+          market,
+
+          orderSize: size,
+
           side: mode,
+
           useQuote
         };
 
@@ -656,27 +765,42 @@ async function runRoundRobin(chatId) {
     }
 
     await new Promise((r) =>
-      setTimeout(r, state.delayMs)
+      setTimeout(
+        r,
+        state.delayMs
+      )
     );
   }
 
   if (!state.running) {
 
-    console.log('[BOT] Settlement cancelled by user');
+    console.log(
+      '[BOT] Settlement cancelled by user'
+    );
+
     return;
   }
 
-  const data2 = getAccountsData();
+  const data2 =
+    getAccountsData();
 
-  for (let i = 0; i < data2.accounts.length; i++) {
+  for (
+    let i = 0;
+    i < data2.accounts.length;
+    i++
+  ) {
 
     if (!state.running) {
 
-      console.log('[BOT] Settlement stopped by user');
+      console.log(
+        '[BOT] Settlement stopped by user'
+      );
+
       return;
     }
 
-    const acc = data2.accounts[i];
+    const acc =
+      data2.accounts[i];
 
     try {
 
@@ -691,7 +815,10 @@ async function runRoundRobin(chatId) {
 
       if (!state.running) {
 
-        console.log('[BOT] Stopped after active orders');
+        console.log(
+          '[BOT] Stopped after active orders'
+        );
+
         return;
       }
 
@@ -701,7 +828,7 @@ async function runRoundRobin(chatId) {
 
       await waitTradesSettled(
         acc.apiKey,
-        'CC/USDCx',
+        market,
         () => state.running,
         cycleStartedAt
       );
@@ -714,37 +841,64 @@ async function runRoundRobin(chatId) {
     }
   }
 
-  await new Promise((r) => setTimeout(r, 5 * 60 * 1000));
+  await new Promise((r) =>
+    setTimeout(
+      r,
+      5 * 60 * 1000
+    )
+  );
 
   if (!state.running) {
 
-    console.log('[BOT] Stopped before recycle check');
+    console.log(
+      '[BOT] Stopped before recycle check'
+    );
+
     return;
   }
 
-  let hasAccountCanTrade = false;
+  let hasAccountCanTrade =
+    false;
 
   const recycleResults = [];
 
-  for (let i = 0; i < data2.accounts.length; i++) {
+  for (
+    let i = 0;
+    i < data2.accounts.length;
+    i++
+  ) {
 
-    const acc = data2.accounts[i];
+    const acc =
+      data2.accounts[i];
 
     try {
 
       const {
         ccValue,
-        usdcxValue
+        usdcxValue,
+        cbtcValue,
+        usdaValue
       } = await templeBalance(acc);
 
-      const cc = Number(ccValue);
-      const usdcx = Number(usdcxValue);
+      const baseBalance =
+        isCbtc
+          ? Number(cbtcValue)
+          : Number(ccValue);
 
-      let canTradeAgain = false;
+      const quoteBalance =
+        isCbtc
+          ? Number(usdaValue)
+          : Number(usdcxValue);
+
+      let canTradeAgain =
+        false;
 
       if (state.mode === 'sell') {
 
-        if (cc >= MIN_CC) {
+        if (
+          baseBalance >=
+          MIN_BASE
+        ) {
 
           canTradeAgain = true;
         }
@@ -752,13 +906,30 @@ async function runRoundRobin(chatId) {
 
       if (state.mode === 'buy') {
 
-        const ccPrice =
-          await getCcPrice(acc.apiKey);
+        const price =
+          isCbtc
+            ? await getCbtcPrice(
+                acc.apiKey
+              )
+            : await getCcPrice(
+                acc.apiKey
+              );
 
-        const maxBuyableCc =
-          Math.floor(usdcx / ccPrice);
+        const maxBuyable =
+          isCbtc
+            ? Number(
+                (
+                  quoteBalance / price
+                ).toFixed(4)
+              )
+            : Math.floor(
+                quoteBalance / price
+              );
 
-        if (maxBuyableCc >= MIN_CC) {
+        if (
+          maxBuyable >=
+          MIN_BASE
+        ) {
 
           canTradeAgain = true;
         }
@@ -772,7 +943,8 @@ async function runRoundRobin(chatId) {
 
       if (canTradeAgain) {
 
-        hasAccountCanTrade = true;
+        hasAccountCanTrade =
+          true;
 
         console.log(
           `[RECYCLE CHECK] ${acc.name} | Balance masih cukup`
@@ -827,7 +999,9 @@ async function runRoundRobin(chatId) {
       setTimeout(r, 10000)
     );
 
-    return await runRoundRobin(chatId);
+    return await runRoundRobin(
+      chatId
+    );
   }
 
   console.log(
@@ -887,42 +1061,123 @@ async function runRoundRobin(chatId) {
   }
 
   await new Promise((r) =>
-    setTimeout(r, 10000)
+    setTimeout(
+      r,
+      10000
+    )
   );
 
   if (!state.running) {
 
-    console.log('[BOT] Fully stopped');
+    console.log(
+      '[BOT] Fully stopped'
+    );
+
     return;
   }
 
-  return await runRoundRobin(chatId);
+  return await runRoundRobin(
+    chatId
+  );
 }
 
 async function templeBalance(acc) {
+
   await initialize({
     API_KEY: acc.apiKey,
-    NETWORK: acc.network || config.common.network || 'mainnet'
+    NETWORK:
+      acc.network ||
+      config.common.network ||
+      'mainnet'
   });
 
-  const res = await getTradingBalance();
-  const balances = Array.isArray(res?.balances) ? res.balances : Array.isArray(res) ? res : [];
-  const cc = balances.find((b) => String(b.asset).toUpperCase() === 'CC');
-  const usdcx = balances.find((b) => String(b.asset).toUpperCase() === 'USDCX');
+  const res =
+    await getTradingBalance();
 
-  const ccValue = Number(cc?.unlocked ?? 0).toFixed(3);
-  const usdcxValue = Number(Number(usdcx?.unlocked ?? 0) + Number(usdcx?.locked ?? 0)).toFixed(3);
+  const balances =
+    Array.isArray(res?.balances)
+      ? res.balances
+      : Array.isArray(res)
+      ? res
+      : [];
 
-  return { ccValue, usdcxValue };
+  const cc =
+    balances.find(
+      (b) =>
+        String(b.asset).toUpperCase() === 'CC'
+    );
+
+  const usdcx =
+    balances.find(
+      (b) =>
+        String(b.asset).toUpperCase() === 'USDCX'
+    );
+
+  const cbtc =
+    balances.find(
+      (b) =>
+        String(b.asset).toUpperCase() === 'CBTC'
+    );
+
+  const usda =
+    balances.find(
+      (b) =>
+        String(b.asset).toUpperCase() === 'USDA'
+    );
+
+  return {
+
+    ccValue:
+      Number(
+        cc?.unlocked ?? 0
+      ).toFixed(3),
+
+    usdcxValue:
+      Number(
+        Number(usdcx?.unlocked ?? 0) +
+        Number(usdcx?.locked ?? 0)
+      ).toFixed(3),
+
+    cbtcValue:
+      Number(
+        cbtc?.unlocked ?? 0
+      ).toFixed(4),
+
+    usdaValue:
+      Number(
+        Number(usda?.unlocked ?? 0) +
+        Number(usda?.locked ?? 0)
+      ).toFixed(3)
+  };
 }
 
-async function templeDeposit(acc, amount, asset, index) {
-  const network = acc.network || config.common.network || 'mainnet';
+async function templeDeposit(
+  acc,
+  amount,
+  asset,
+  index
+) {
 
-  await initLoopServerForAccount(index, { network });
+  const network =
+    acc.network ||
+    config.common.network ||
+    'mainnet';
 
-  const walletBefore = await getLoopWalletBalances(index);
-  const preGas = await checkAndPayDueGas(index, { network });
+  await initLoopServerForAccount(
+    index,
+    { network }
+  );
+
+  const walletBefore =
+    await getLoopWalletBalances(
+      index
+    );
+
+  const preGas =
+    await checkAndPayDueGas(
+      index,
+      { network }
+    );
 
   await initialize({
     API_KEY: acc.apiKey,
@@ -930,34 +1185,75 @@ async function templeDeposit(acc, amount, asset, index) {
     WALLET_ADAPTER: loop
   });
 
-  const assetId = asset === 'cc' ? 'Amulet' : 'USDCx';
-  const prepared = await prepareDepositHoldings(amount, assetId);
+  let assetId = '';
 
-  const result = await depositFunds({
-    ...prepared,
-    sender: acc.partyId,
-    assetId,
-    amount
-  });
+  if (asset === 'cc') {
 
-  const postGas = await waitAndPayDueGas(index, { network }, {
-    attempts: 8,
-    intervalMs: 10000
-  });
+    assetId = 'Amulet';
 
-  const walletAfter = await getLoopWalletBalances(index);
+  } else if (asset === 'usdcx') {
 
-  const feeSummary = buildFeeSummary({
-    preGas,
-    postGas,
-    depositResult: result,
-    ccBefore: walletBefore.cc,
-    ccAfter: walletAfter.cc
-  });
+    assetId = 'USDCx';
+
+  } else if (asset === 'cbtc') {
+
+    assetId = 'CBTC';
+
+  } else if (asset === 'usda') {
+
+    assetId = 'USDA';
+
+  } else {
+
+    throw new Error(
+      `Unsupported asset ${asset}`
+    );
+  }
+
+  const prepared =
+    await prepareDepositHoldings(
+      amount,
+      assetId
+    );
+
+  const result =
+    await depositFunds({
+      ...prepared,
+      sender: acc.partyId,
+      assetId,
+      amount
+    });
+
+  const postGas =
+    await waitAndPayDueGas(
+      index,
+      { network },
+      {
+        attempts: 8,
+        intervalMs: 10000
+      }
+    );
+
+  const walletAfter =
+    await getLoopWalletBalances(
+      index
+    );
+
+  const feeSummary =
+    buildFeeSummary({
+      preGas,
+      postGas,
+      depositResult: result,
+      ccBefore: walletBefore.cc,
+      ccAfter: walletAfter.cc
+    });
 
   return {
     result,
-    gasInfo: { preGas, postGas },
+    gasInfo: {
+      preGas,
+      postGas
+    },
     walletBefore,
     walletAfter,
     feeSummary
@@ -985,19 +1281,68 @@ bot.onText(/^\/startbot$/, async (msg) => {
 });
 
 bot.onText(/^\/runbot$/, async (msg) => {
+
   const chatId = msg.chat.id;
 
   if (state.running) {
-    await bot.sendMessage(chatId, 'Bot sudah berjalan');
+
+    await bot.sendMessage(
+      chatId,
+      'Bot sudah berjalan'
+    );
+
     return;
   }
 
+  await bot.sendMessage(
+    chatId,
+    'Pilih Pair Trade\n\n1. CC/USDCx\n2. CBTC/USDA'
+  );
+
+  state.selectingMarket = true;
+});
+
+bot.on('message', async (msg) => {
+
+  const chatId = msg.chat.id;
+
+  const text =
+    String(msg.text || '').trim();
+
+  if (!state.selectingMarket) {
+    return;
+  }
+
+  if (text === '1') {
+
+    state.market = 'CC/USDCx';
+
+  } else if (text === '2') {
+
+    state.market = 'CBTC/USDA';
+
+  } else {
+
+    await bot.sendMessage(
+      chatId,
+      'Pilihan tidak valid.\nKetik 1 atau 2'
+    );
+
+    return;
+  }
+
+  state.selectingMarket = false;
+
   state.running = true;
+
   state.lastChatId = chatId;
 
   await bot.sendMessage(
     chatId,
-    `Bot dijalankan\nMode: ${state.mode.toUpperCase()}\nDelay: ${state.delayMs / 1000} detik`
+    `Bot dijalankan\n` +
+    `Pair: ${state.market}\n` +
+    `Mode: ${state.mode.toUpperCase()}\n` +
+    `Delay: ${state.delayMs / 1000} detik`
   );
 
   try {
@@ -1005,12 +1350,17 @@ bot.onText(/^\/runbot$/, async (msg) => {
     await runRoundRobin(chatId);
 
   } catch (e) {
-    error('runbot error', e?.message || e);
+
+    error(
+      'runbot error',
+      e?.message || e
+    );
 
     await bot.sendMessage(
       chatId,
       `Bot berhenti karena error:\n${e?.message || e}`
     );
+
   } finally {
 
     state.running = false;
@@ -1045,73 +1395,171 @@ bot.onText(/^\/setdelay(?:\s+(\d+))?$/, async (msg, match) => {
 });
 
 bot.onText(/^\/balance$/, async (msg) => {
+
   const chatId = msg.chat.id;
+
   const data = getAccountsData();
 
   if (!data.accounts.length) {
-    await bot.sendMessage(chatId, 'Belum ada akun.');
+
+    await bot.sendMessage(
+      chatId,
+      'Belum ada akun.'
+    );
+
     return;
   }
 
   const lines = [];
 
   for (const acc of data.accounts) {
+
     try {
+
       if (!acc.apiKey) {
-        lines.push(`[${acc.name || '-'}] ERROR | API key kosong`);
+
+        lines.push(
+          `[${acc.name || '-'}] ERROR | API key kosong`
+        );
+
         continue;
       }
 
-      const { ccValue, usdcxValue } = await templeBalance(acc);
-      lines.push(`[${acc.name || '-'}] CC ${ccValue} | USDCx ${usdcxValue}`);
+      const {
+        ccValue,
+        usdcxValue,
+        cbtcValue,
+        usdaValue
+      } = await templeBalance(acc);
+
+      lines.push(
+        `[${acc.name || '-'}] ` +
+        `CC ${ccValue} | ` +
+        `USDCx ${usdcxValue} | ` +
+        `CBTC ${cbtcValue} | ` +
+        `USDA ${usdaValue}`
+      );
+
     } catch (e) {
-      lines.push(`[${acc.name || '-'}] ERROR | ${e?.message || e}`);
+
+      lines.push(
+        `[${acc.name || '-'}] ERROR | ${e?.message || e}`
+      );
     }
   }
 
-  await bot.sendMessage(chatId, lines.join('\n'));
+  await bot.sendMessage(
+    chatId,
+    lines.join('\n')
+  );
 });
 
 bot.onText(/^\/wallet$/, async (msg) => {
+
   const chatId = msg.chat.id;
+
   const data = getAccountsData();
 
   if (!data.accounts.length) {
-    await bot.sendMessage(chatId, 'Belum ada akun.');
+
+    await bot.sendMessage(
+      chatId,
+      'Belum ada akun.'
+    );
+
     return;
   }
 
   const lines = [];
 
-  for (let i = 0; i < data.accounts.length; i++) {
-    const acc = data.accounts[i];
+  for (
+    let i = 0;
+    i < data.accounts.length;
+    i++
+  ) {
+
+    const acc =
+      data.accounts[i];
 
     try {
-      const holdings = await tryGetLoopHoldings(i);
-      const arr = Array.isArray(holdings) ? holdings : [];
+
+      const holdings =
+        await tryGetLoopHoldings(i);
+
+      const arr =
+        Array.isArray(holdings)
+          ? holdings
+          : [];
 
       let cc = 0;
       let usdcx = 0;
+      let cbtc = 0;
+      let usda = 0;
 
       for (const h of arr) {
-        const instrument = h?.instrument_id || {};
-        const id = String(instrument.id || instrument.instrument_id || h?.asset || '').toLowerCase();
-        const unlocked = Number(h?.total_unlocked_coin ?? 0);
 
-        if (id === 'amulet' || id === 'cc') {
+        const instrument =
+          h?.instrument_id || {};
+
+        const id = String(
+          instrument.id ||
+          instrument.instrument_id ||
+          h?.asset ||
+          ''
+        ).toLowerCase();
+
+        const unlocked =
+          Number(
+            h?.total_unlocked_coin ?? 0
+          );
+
+        if (
+          id === 'amulet' ||
+          id === 'cc'
+        ) {
+
           cc += unlocked;
-        } else if (id === 'usdcx') {
+
+        } else if (
+          id === 'usdcx'
+        ) {
+
           usdcx += unlocked;
+
+        } else if (
+          id === 'cbtc'
+        ) {
+
+          cbtc += unlocked;
+
+        } else if (
+          id === 'usda'
+        ) {
+
+          usda += unlocked;
         }
       }
 
-      lines.push(`[${acc.name || `akun ${i + 1}`}] ${cc.toFixed(3)} CC | ${usdcx.toFixed(3)} USDCx`);
+      lines.push(
+        `[${acc.name || `akun ${i + 1}`}] ` +
+        `${cc.toFixed(3)} CC | ` +
+        `${usdcx.toFixed(3)} USDCx | ` +
+        `${cbtc.toFixed(4)} CBTC | ` +
+        `${usda.toFixed(3)} USDA`
+      );
+
     } catch (e) {
-      lines.push(`[${acc.name || `akun ${i + 1}`}] ERROR | ${e?.message || e}`);
+
+      lines.push(
+        `[${acc.name || `akun ${i + 1}`}] ERROR | ${e?.message || e}`
+      );
     }
   }
 
-  await bot.sendMessage(chatId, lines.join('\n'));
+  await bot.sendMessage(
+    chatId,
+    lines.join('\n')
+  );
 });
 
 bot.onText(/^\/checkprice$/, async (msg) => {
@@ -1120,9 +1568,11 @@ bot.onText(/^\/checkprice$/, async (msg) => {
 
   try {
 
-    const data = getAccountsData();
+    const data =
+      getAccountsData();
 
-    const acc = data.accounts?.[0];
+    const acc =
+      data.accounts?.[0];
 
     if (!acc?.apiKey) {
 
@@ -1135,18 +1585,24 @@ bot.onText(/^\/checkprice$/, async (msg) => {
     }
 
     const price =
-      await getCcPrice(acc.apiKey);
+      state.market === 'CBTC/USDA'
+        ? await getCbtcPrice(
+            acc.apiKey
+          )
+        : await getCcPrice(
+            acc.apiKey
+          );
 
     await bot.sendMessage(
       chatId,
-      `Price CC/USDCx: ${Number(price).toFixed(4)}`
+      `Price ${state.market}: ${Number(price).toFixed(4)}`
     );
 
   } catch (e) {
 
     await bot.sendMessage(
       chatId,
-      `Gagal mengambil harga CC\nAlasan: ${e?.message || e}`
+      `Gagal mengambil harga\nAlasan: ${e?.message || e}`
     );
   }
 });
@@ -1167,114 +1623,253 @@ bot.onText(/^\/mode$/, async (msg) => {
   );
 });
 
-bot.onText(/^\/deposit\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(cc|usdcx)$/i, async (msg, match) => {
-  const chatId = msg.chat.id;
+bot.onText(
+  /^\/deposit\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(cc|usdcx|cbtc|usda)$/i,
+  async (msg, match) => {
 
-  try {
-    const index = Number(match?.[1]) - 1;
-    const amount = Number(match?.[2]);
-    const assetInput = String(match?.[3] || '').toLowerCase();
+    const chatId =
+      msg.chat.id;
 
-    if (!Number.isFinite(index) || index < 0) {
-      await bot.sendMessage(chatId, 'Format: /deposit 1 100 cc');
-      return;
-    }
+    try {
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      await bot.sendMessage(chatId, 'Amount harus angka > 0');
-      return;
-    }
+      const index =
+        Number(match?.[1]) - 1;
 
-    let asset = '';
-    if (assetInput === 'cc') asset = 'cc';
-    else if (assetInput === 'usdcx') asset = 'usdcx';
-    else {
-      await bot.sendMessage(chatId, 'Asset hanya: cc atau usdcx');
-      return;
-    }
+      const amount =
+        Number(match?.[2]);
 
-    const data = getAccountsData();
-    const acc = data.accounts[index];
+      const assetInput =
+        String(
+          match?.[3] || ''
+        ).toLowerCase();
 
-    if (!acc) {
-      await bot.sendMessage(chatId, `Akun ${index + 1} tidak ditemukan.`);
-      return;
-    }
+      if (
+        !Number.isFinite(index) ||
+        index < 0
+      ) {
 
-    if (!acc.apiKey) {
-      await bot.sendMessage(chatId, `Akun ${index + 1} belum punya API key.`);
-      return;
-    }
+        await bot.sendMessage(
+          chatId,
+          'Format: /deposit 1 100 cc'
+        );
 
-    await bot.sendMessage(
-      chatId,
-      `Deposit ${amount} ${asset.toUpperCase()} untuk ${acc.name || 'akun ' + (index + 1)}`
-    );
+        return;
+      }
 
-    await bot.sendMessage(chatId, 'Waiting Deposit...');
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
 
-    const tx = await templeDeposit(acc, amount, asset, index);
+        await bot.sendMessage(
+          chatId,
+          'Amount harus angka > 0'
+        );
 
-    if (tx?.result?.error) {
-      const clean = parseDepositError(tx.result.error);
-      console.log(
-        `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ${amount} ${asset.toUpperCase()} | fee: n/a | Failed`
+        return;
+      }
+
+      let asset = '';
+
+      if (assetInput === 'cc') {
+
+        asset = 'cc';
+
+      } else if (
+        assetInput === 'usdcx'
+      ) {
+
+        asset = 'usdcx';
+
+      } else if (
+        assetInput === 'cbtc'
+      ) {
+
+        asset = 'cbtc';
+
+      } else if (
+        assetInput === 'usda'
+      ) {
+
+        asset = 'usda';
+
+      } else {
+
+        await bot.sendMessage(
+          chatId,
+          'Asset hanya: cc, usdcx, cbtc, usda'
+        );
+
+        return;
+      }
+
+      const data =
+        getAccountsData();
+
+      const acc =
+        data.accounts[index];
+
+      if (!acc) {
+
+        await bot.sendMessage(
+          chatId,
+          `Akun ${index + 1} tidak ditemukan.`
+        );
+
+        return;
+      }
+
+      if (!acc.apiKey) {
+
+        await bot.sendMessage(
+          chatId,
+          `Akun ${index + 1} belum punya API key.`
+        );
+
+        return;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        `Deposit ${amount} ${asset.toUpperCase()} untuk ${acc.name || 'akun ' + (index + 1)}`
       );
-      await bot.sendMessage(chatId, `Deposit gagal\nAlasan: ${clean}`);
-      return;
-    }
 
-    if (!tx?.result || tx?.result?.status === 'failed') {
-      console.log(
-        `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ${amount} ${asset.toUpperCase()} | fee: n/a | Failed`
+      await bot.sendMessage(
+        chatId,
+        'Waiting Deposit...'
       );
-      await bot.sendMessage(chatId, 'Deposit gagal (unknown error)');
-      return;
+
+      const tx =
+        await templeDeposit(
+          acc,
+          amount,
+          asset,
+          index
+        );
+
+      if (tx?.result?.error) {
+
+        const clean =
+          parseDepositError(
+            tx.result.error
+          );
+
+        console.log(
+          `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ` +
+          `${amount} ${asset.toUpperCase()} | fee: n/a | Failed`
+        );
+
+        await bot.sendMessage(
+          chatId,
+          `Deposit gagal\nAlasan: ${clean}`
+        );
+
+        return;
+      }
+
+      if (
+        !tx?.result ||
+        tx?.result?.status === 'failed'
+      ) {
+
+        console.log(
+          `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ` +
+          `${amount} ${asset.toUpperCase()} | fee: n/a | Failed`
+        );
+
+        await bot.sendMessage(
+          chatId,
+          'Deposit gagal (unknown error)'
+        );
+
+        return;
+      }
+
+      const feeInfo =
+        renderFeeText(
+          tx?.feeSummary
+        );
+
+      const feeCc =
+        Number.parseFloat(
+          tx?.feeSummary?.feeCc
+        ) || 0;
+
+      if (feeCc > 0) {
+
+        addAccumulatedFee(
+          index,
+          feeCc
+        );
+      }
+
+      console.log(
+        `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ` +
+        `${amount} ${asset.toUpperCase()} | fee: ` +
+        `${
+          tx?.feeSummary?.feeCc
+            ? Number.parseFloat(
+                Number(
+                  tx.feeSummary.feeCc
+                ).toFixed(6)
+              )
+            : 'n/a'
+        }CC | Success`
+      );
+
+      await bot.sendMessage(
+        chatId,
+        `Deposit berhasil\n` +
+        `Akun: ${acc.name || 'akun ' + (index + 1)}\n` +
+        `Asset: ${asset.toUpperCase()}\n` +
+        `Amount: ${amount}\n` +
+        `${feeInfo}`
+      );
+
+    } catch (e) {
+
+      const rawError =
+        e?.message || e;
+
+      console.log(
+        '[DEPOSIT][ERROR]',
+        rawError
+      );
+
+      const clean =
+        parseDepositError(
+          rawError
+        );
+
+      await bot.sendMessage(
+        chatId,
+        `Deposit gagal\nAlasan: ${clean}`
+      );
     }
-
-    const feeInfo = renderFeeText(tx?.feeSummary);
-    const feeCc = Number.parseFloat(tx?.feeSummary?.feeCc) || 0;
-
-    if (feeCc > 0) {
-      addAccumulatedFee(index, feeCc);
-    }
-
-    console.log(
-      `[DEPOSIT] ${acc.name || `akun${index + 1}`} | ${amount} ${asset.toUpperCase()} | fee: ${
-        tx?.feeSummary?.feeCc
-          ? Number.parseFloat(Number(tx.feeSummary.feeCc).toFixed(6))
-          : 'n/a'
-      }CC | Success`
-    );
-
-    await bot.sendMessage(
-      chatId,
-      `Deposit berhasil\n` +
-      `Akun: ${acc.name || 'akun ' + (index + 1)}\n` +
-      `Asset: ${asset.toUpperCase()}\n` +
-      `Amount: ${amount}\n` +
-      `${feeInfo}`
-    );
-  } catch (e) {
-    const rawError = e?.message || e;
-    console.log('[DEPOSIT][ERROR]', rawError);
-
-    const clean = parseDepositError(rawError);
-    await bot.sendMessage(chatId, `Deposit gagal\nAlasan: ${clean}`);
   }
-});
+);
 
 bot.onText(/^\/deposit/, async (msg) => {
-  const text = String(msg.text || '').trim();
 
-  if (/^\/deposit\s+\d+\s+\d+(\.\d+)?\s+(cc|usdcx)$/i.test(text)) {
+  const text =
+    String(msg.text || '').trim();
+
+  if (
+    /^\/deposit\s+\d+\s+\d+(\.\d+)?\s+(cc|usdcx|cbtc|usda)$/i.test(text)
+  ) {
     return;
   }
 
   await bot.sendMessage(
     msg.chat.id,
-    'Format salah.\nGunakan: \n=> <code>/deposit 1 100 cc</code>\n=> <code>/deposit 1 100 usdcx</code>',
-    { parse_mode: 'HTML' }
+    'Format salah.\nGunakan: \n' +
+    '=> <code>/deposit 1 100 cc</code>\n' +
+    '=> <code>/deposit 1 100 usdcx</code>\n' +
+    '=> <code>/deposit 1 0.0001 cbtc</code>\n' +
+    '=> <code>/deposit 1 10 usda</code>',
+    {
+      parse_mode: 'HTML'
+    }
   );
 });
 
@@ -1346,6 +1941,7 @@ bot.onText(/^\/detailset$/, async (msg) => {
 
   lines.push(`Delay internal: ${state.delayMs / 1000} detik`);
   lines.push(`Mode: ${state.mode.toUpperCase()}`);
+  lines.push(`Pair: ${state.market}`);
   lines.push('');
   lines.push('Detail akun:');
 
