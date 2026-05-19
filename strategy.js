@@ -11,11 +11,56 @@ function n(v, d = 0) {
 }
 
 function normalizeSymbol(symbol) {
-  return String(symbol || '').replace(/CC/gi, 'Amulet');
+
+  const s =
+    String(symbol || '');
+
+  if (
+    s.toUpperCase() ===
+    'CC/USDCX'
+  ) {
+
+    return 'Amulet/USDCx';
+  }
+
+  return s;
 }
 
 function displaySymbol(symbol) {
-  return String(symbol || '').replace(/Amulet/gi, 'CC');
+
+  const s =
+    String(symbol || '');
+
+  if (
+    s.toUpperCase() ===
+    'AMULET/USDCX'
+  ) {
+
+    return 'CC/USDCx';
+  }
+
+  return s;
+}
+
+const MARKET_CONFIG = {
+  'CC/USDCx': {
+    minQty: 100,
+    decimals: 0,
+    priceFn: 'cc'
+  },
+
+  'CBTC/USDA': {
+    minQty: 0.0001,
+    decimals: 4,
+    priceFn: 'cbtc'
+  }
+};
+
+function getMarketConfig(symbol) {
+  return (
+    MARKET_CONFIG[symbol] ||
+    MARKET_CONFIG['CC/USDCx']
+  );
 }
 
 function formatSimple(
@@ -27,6 +72,7 @@ function formatSimple(
   price = null,
   orderSize = null
 ) {
+
   const typeText =
     String(orderType || 'market')
       .toUpperCase();
@@ -35,26 +81,35 @@ function formatSimple(
     String(side || 'buy')
       .toUpperCase();
 
+  const [baseAsset, quoteAsset] =
+    String(symbol).split('/');
+
   let convertText = '';
 
   if (
     Number.isFinite(Number(orderSize)) &&
     Number(orderSize) > 0
   ) {
+
     if (side === 'buy') {
+
       const spent =
         Number(orderSize) *
         Number(price || 0);
 
       convertText =
-        `[${accName}] ${spent.toFixed(2)} USDCX => ${Number(orderSize).toFixed(2)} CC`;
+        `[${accName}] ${spent.toFixed(4)} ${quoteAsset} => ` +
+        `${Number(orderSize).toFixed(4)} ${baseAsset}`;
+
     } else {
+
       const received =
         Number(orderSize) *
         Number(price || 0);
 
       convertText =
-        `[${accName}] ${Number(orderSize).toFixed(2)} CC => ${received.toFixed(2)} USDCX`;
+        `[${accName}] ${Number(orderSize).toFixed(4)} ${baseAsset} => ` +
+        `${received.toFixed(4)} ${quoteAsset}`;
     }
   }
 
@@ -89,6 +144,34 @@ export async function getCcPrice(apiKey) {
 
   if (!Number.isFinite(price) || price <= 0) {
     throw new Error('CC price not found');
+  }
+
+  return price;
+}
+
+export async function getCbtcPrice(apiKey) {
+  const res = await fetch(
+    'https://api.templedigitalgroup.com/api/v1/market/ticker?symbol=CBTC/USDA',
+    {
+      method: 'GET',
+      headers: {
+        'X-API-Key': apiKey
+      }
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  const json = await res.json();
+
+  const price = Number(
+    json?.ticker?.last_price
+  );
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error('CBTC price not found');
   }
 
   return price;
@@ -291,7 +374,9 @@ export async function runStrategyForAccount(acc) {
     ).toLowerCase();
 
   const symbol =
-    normalizeSymbol(acc?.market);
+    normalizeSymbol(
+      acc?.market || 'CC/USDCx'
+    );
 
   const accName =
     acc?.name || 'acc';
@@ -321,7 +406,9 @@ export async function runStrategyForAccount(acc) {
     });
 
     const marketPrice =
-      await getCcPrice(acc.apiKey);
+      symbol === 'CBTC/USDA'
+        ? await getCbtcPrice(acc.apiKey)
+        : await getCcPrice(acc.apiKey);
 
     if (
       !Number.isFinite(marketPrice) ||
@@ -358,10 +445,19 @@ export async function runStrategyForAccount(acc) {
       );
     }
 
+    const marketCfg = getMarketConfig(displaySymbol(symbol));
+
+    const quantity =
+      Number(
+        Number(orderSize).toFixed(
+          marketCfg.decimals
+        )
+      );
+
     const payload = {
       symbol,
       side,
-      quantity: Math.floor(orderSize),
+      quantity,
       price: Number(
         marketPrice.toFixed(6)
       ),
@@ -370,7 +466,7 @@ export async function runStrategyForAccount(acc) {
 
     console.log(
       `[ORDER] ${side.toUpperCase()} | ` +
-      `${Number(orderSize).toFixed(2)} CC | ` +
+      `${quantity} ${symbol.split('/')[0]} | ` +
       `Price: ${Number(payload.price).toFixed(4)}`
     );
 
@@ -394,7 +490,7 @@ export async function runStrategyForAccount(acc) {
         symbol,
         'FAILED',
         marketPrice,
-        orderSize
+        quantity
       );
     }
 
@@ -413,7 +509,7 @@ export async function runStrategyForAccount(acc) {
       symbol,
       'SUCCESS',
       executedPrice,
-      orderSize
+      quantity
     );
 
   } catch (e) {
