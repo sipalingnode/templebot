@@ -15,6 +15,7 @@ execSync(
   }
 );
 
+const USDA_ASSET_ID = '3574b536-cad1-4074-9b64-859398713ba0';
 
 if (!config.telegramBotToken) {
   throw new Error('TELEGRAM_BOT_TOKEN kosong');
@@ -229,8 +230,14 @@ function buildFeeSummary({ preGas, postGas, depositResult, ccBefore, ccAfter }) 
 }
 
 async function getLoopWalletBalances(index) {
-  const holdings = await tryGetLoopHoldings(index);
-  const arr = Array.isArray(holdings) ? holdings : [];
+
+  const holdings =
+    await tryGetLoopHoldings(index);
+
+  const arr =
+    Array.isArray(holdings)
+      ? holdings
+      : [];
 
   let cc = 0;
   let usdcx = 0;
@@ -238,7 +245,9 @@ async function getLoopWalletBalances(index) {
   let usda = 0;
 
   for (const h of arr) {
-    const instrument = h?.instrument_id || {};
+
+    const instrument =
+      h?.instrument_id || {};
 
     const id = String(
       instrument.id ||
@@ -251,16 +260,30 @@ async function getLoopWalletBalances(index) {
       h?.total_unlocked_coin ?? 0
     );
 
-    if (id === 'amulet' || id === 'cc') {
+    if (
+      id.includes('amulet') ||
+      id === 'cc'
+    ) {
+
       cc += unlocked;
 
-    } else if (id === 'usdcx') {
+    } else if (
+      id.includes('usdcx')
+    ) {
+
       usdcx += unlocked;
 
-    } else if (id === 'cbtc') {
+    } else if (
+      id.includes('cbtc')
+    ) {
+
       cbtc += unlocked;
 
-    } else if (id === 'usda') {
+    } else if (
+      id.includes('usda') ||
+      id === USDA_ASSET_ID
+    ) {
+
       usda += unlocked;
     }
   }
@@ -1514,26 +1537,27 @@ bot.onText(/^\/wallet$/, async (msg) => {
           );
 
         if (
-          id === 'amulet' ||
+          id.includes('amulet') ||
           id === 'cc'
         ) {
 
           cc += unlocked;
 
         } else if (
-          id === 'usdcx'
+          id.includes('usdcx')
         ) {
 
           usdcx += unlocked;
 
         } else if (
-          id === 'cbtc'
+          id.includes('cbtc')
         ) {
 
           cbtc += unlocked;
 
         } else if (
-          id === 'usda'
+          id.includes('usda') ||
+          id === USDA_ASSET_ID
         ) {
 
           usda += unlocked;
@@ -1545,7 +1569,7 @@ bot.onText(/^\/wallet$/, async (msg) => {
         `${cc.toFixed(3)} CC | ` +
         `${usdcx.toFixed(3)} USDCx | ` +
         `${cbtc.toFixed(4)} CBTC | ` +
-        `${usda.toFixed(3)} USDA`
+        `${usda.toFixed(2)} USDA`
       );
 
     } catch (e) {
